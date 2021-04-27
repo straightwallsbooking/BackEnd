@@ -9,6 +9,7 @@ router.post('/specific-employee-timeoff-requests',withAuth,managersController.ge
 router.get('/my-employees',withAuth,managersController.getMyEmployees)
 router.post('/accept-request',withAuth,managersController.acceptRequest)
 router.post('/reject-request',withAuth,managersController.rejectRequest)
+router.post('/my-employees-status-on-date',withAuth,managersController.getEmployeesStatusOnDate)
 // router.get('/checklogin',withAuth,authController.checkLogin)
 
 export default router;

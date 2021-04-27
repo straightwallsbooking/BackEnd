@@ -8,7 +8,6 @@ export const s = async (startDate, endDate, totalDays, alternate = false,id) => 
         do {
             startDate = startDate.subtract(-1, 'd')
             endDate = endDate.subtract(-1, 'd')
-            console.log(startDate,endDate)
         } while (calculateTotalDays(startDate, endDate) > totalDays)
         return s(startDate, endDate, totalDays, alternate,id)
     }

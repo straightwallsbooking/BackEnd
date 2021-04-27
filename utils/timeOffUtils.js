@@ -1,4 +1,5 @@
 import moment from 'moment';
+import { Op } from 'sequelize'
 // import employee from '../models/employee.js';
 import db from '../models/index.js'
 const _timeOffRequest = db.models.requesttimeoff;
@@ -29,6 +30,27 @@ export const getRequestsTimeOffOfSpecificEmployee = async (m_id, e_id) => {
     })
     return timeOffRequests
 }
+export const getEmployeesTimeOffStatusForADate = async (date,department_id,m_id) =>{
+    const checkDate = moment(date)
+    const timeOffRequests = await _timeOffRequest.findAll({where:{
+        [Op.and]: [
+            { startDate: { [Op.lte]: checkDate.toDate() } },
+            { endDate: { [Op.gte]: checkDate.toDate() } }
+        ],
+    }})
+    const employees = await _employee.findAll({where:{department_id,manager_id:m_id}})
+    const status = employees.map(e=>{
+        const temp = {employee:e,status: 'Available',timeOffRequest:null }
+        timeOffRequests.forEach(t=>{
+            if(t.employee_id==e.id){
+                temp.status= t.status_id == 1 ? 'Waiting Approval' : 'On Leave'
+                temp.timeOffRequest = t
+            }
+        })
+        return temp
+    })
+    return status
+}
 
 export const calculateTotalDays = (startDate, endDate) => {
     // exclude weekends 
@@ -58,7 +80,6 @@ export const acceptRequestU =async  (reqId) =>{
         const request = await _timeOffRequest.findByPk(parseInt(reqId))
         request.status_id= 6
         let timeoffDetails = await _timeoff.findByPk(request.employee_id)
-        console.log(timeoffDetails,request)
         const totalDays = request.totalDays
         request.save()
         timeoffDetails = await timeoffDetails.decrement('vacationBalance',{by:parseInt(request.totalDays)})
