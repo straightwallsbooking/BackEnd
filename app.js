@@ -7,6 +7,7 @@ import authRouter from './routes/authRoutes'
 import profileRouter from './routes/profileRoutes'
 import timeOffRouter from './routes/timeoffRoutes'
 import holidayTypesRoutes from './routes/holidayTypes'
+import managerRoutes from './routes/managerRoutes'
 import db from './models'
 
 const app = express();
@@ -18,7 +19,7 @@ app.use(express.urlencoded({ extended: false, limit: '10mb' }));
 app.use(
   cors({
     origin:
-       'http://localhost:3001',
+       'http://localhost:3000',
       credentials: true
   })
 );
@@ -33,5 +34,6 @@ app.use('/profile',profileRouter)
 app.use('/auth',authRouter)
 app.use('/timeoff',timeOffRouter)
 app.use('/holidayTypes',holidayTypesRoutes)
+app.use('/manager',managerRoutes)
 
 export default app;

@@ -8,6 +8,4 @@ export const getProfile = async (req, res) => {
     const profileDetails = await _employee.findByPk(id,{include:['role','department']})
     if(!profileDetails) return ReE(res,"No profile found",null,404)
     return ReS(res,"Profile found",profileDetails,200)
-
-
 }

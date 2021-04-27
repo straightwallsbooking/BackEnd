@@ -1,9 +1,10 @@
 import db from '../models/index.js' // models path depend on your structure
 import { ReCD, ReE, ReS } from '../utils/response.js';
 import jwt from 'jsonwebtoken'
-import { getRequestsTimeOff, getRequestsTimeOffOfAllEmployeesForManager } from '../utils/timeOffUtils.js';
+import { calculateTotalDays, getRequestsTimeOff, getRequestsTimeOffOfAllEmployeesForManager } from '../utils/timeOffUtils.js';
 import moment from 'moment'
-import { isPeakTime } from '../utils/requestTimeOffUtils.js';
+import { hasEnoughBalanceAuto, hasEnoughBalanceManual, isPeakTime, processAutomaticVacationTimeOffRequest } from '../utils/requestTimeOffUtils.js';
+import { s } from '../utils/automatedLeave.js';
 const _timeOffRequest = db.models.requesttimeoff;
 const _timeoff = db.models.timeoff
 const _employee = db.models.employee
@@ -43,53 +44,83 @@ const processTimeOffRequest = async (req, res) => {
     startDate = moment(startDate)
     endDate = moment(endDate)
 
-    const totalDays = startDate.diff(endDate, 'days') + 1
-    const timeOffDetails = await _timeoff.findByPk(id)
+    // TODO check if this is neccasssary 
+
+    const existing = await _timeOffRequest.findAll({ where: { employee_id: id } })
+    if (existing.filter(r => startDate.isBetween(r.startDate, r.endDate) || endDate.isBetween(r.startDate, r.endDate) || (startDate == r.startDate && endDate == r.endDate)).length) {
+        return ReE(res, "Some of days already taken by you, please give correct dates", null, 400)
+    }
+    // TODO Check if holiday in range 
+    const totalDays = calculateTotalDays(startDate, endDate)
+    if(totalDays==0) return ReE(res,"Either there are no days which are not already holidays or the range is incorrect",null,400)
+    let timeOffDetails = await _timeoff.findByPk(id)
     if ([2, 3, 4].includes(parseInt(type_id))) {
         // manual process
         if ([1, 2, 3, 4].includes(profile.role_id)) {
             // no need approval because either president,head,deputy or manager
+
+            const r = await hasEnoughBalanceManual(timeOffDetails, type_id, totalDays)
+            const hasBalance = r.done
+            timeOffDetails = r.timeOffDetails
+            if (!hasBalance)
+                return ReE(res, "You dont have enough balance for this type",
+                    { request: null, timeOffDetails }, 400)
             const request = await _timeOffRequest.create({
                 employee_id: id, leave_id: type_id, approver_id: null, status_id: 6
                 , startDate, endDate, totalDays, requestReason: reason, peaktime_flag: isPeakTime(startDate, endDate) ? 'T' : 'F'
-            })
-            switch (parseInt(type_id)) {
-                case 2:
-                    //casual
-                    await timeOffDetails.decrement('casualBalance',{by:1})
-                    break;
-                case 3:
-                    //sick
-                    await timeOffDetails.decrement('sickBalance',{by:1})
-                    break;
-                case 4:
-                    await timeOffDetails.increment('unpaidUsed',{by:1})
-                    //unpaid
-                    break;
-                default:
-                    break;
-            }
-            return ReS(res,"Leave Request Has Been Accepted and Recorded",{timeOffDetails,request},200)
+            },{include:'leave'})
+            return ReS(res, "Leave Request Has Been Accepted and Recorded", { timeOffDetails, request }, 200)
         } else {
             // request made but waiting for approval from manager
+            const r = await hasEnoughBalanceManual(timeOffDetails, type_id, totalDays)
+            const hasBalance = r.done
+            timeOffDetails = r.timeOffDetails
+             if (!hasBalance)
+                return ReE(res, "You dont have enough balance for this type",
+                    { request: null, timeOffDetails }, 400)
             const request = await _timeOffRequest.create({
                 employee_id: id, leave_id: type_id, approver_id: profile.manager_id, status_id: 1
                 , startDate, endDate, totalDays, requestReason: reason, peaktime_flag: isPeakTime(startDate, endDate) ? 'T' : 'F'
-            })
-            return ReS(res,"Leave Request Has Been Recorded and Awaiting Manager Approval",{request,timeOffDetails},200)
+            },{include:'leave'})
+            return ReS(res, "Leave Request Has Been Recorded and Awaiting Manager Approval", { request, timeOffDetails }, 200)
         }
 
     } else {
-        // automatic approval
+        // automatic approval for vacation type
+
+        if (!hasEnoughBalanceAuto(totalDays, timeOffDetails))
+            return ReE(res, "You dont have enough vacation balance", { timeOffDetails, request: null }, 400)
+
+        const christmasStart = moment(`${startDate.year()}-12-24`)
+        const christmasEnd = moment(`${startDate.year() + 1}-01-02`)
+        if ((christmasEnd == endDate && christmasStart == startDate) || (startDate.isBetween(christmasStart, christmasEnd) && endDate.isBetween(christmasStart, christmasEnd))) {
+            // const christmas = { start, end }
+            const request = await _timeOffRequest.create({
+                employee_id: id, leave_id: type_id, approver_id: null, status_id: 6
+                , startDate, endDate, totalDays, requestReason: reason, peaktime_flag: isPeakTime(startDate, endDate) ? 'T' : 'F'
+            },{include:'leave'})
+            timeOffDetails = await timeOffDetails.decrement('vacationBalance', { by: totalDays })
+            timeOffDetails =await timeOffDetails.increment('vacationUsed', { by: totalDays })
+            return ReS(res, "Leave Request Has Been Accepted and Recorded", { timeOffDetails, request }, 200)
+        } else {
+            const response = await s(startDate, endDate, totalDays, false, id)
+            if (response.alternate) {
+                // alternate dates provided 
+                return ReS(res, "Alternate Dates Provided", { timeOffDetails, request: null, alternate: { ...response } }, 200)
+            }
+            else {
+                const request = await _timeOffRequest.create({
+                    employee_id: id, leave_id: type_id, approver_id: null, status_id: 6
+                    , startDate, endDate, totalDays, requestReason: reason, peaktime_flag: isPeakTime(startDate, endDate) ? 'T' : 'F'
+                },{include:['leave']})
+                timeOffDetails =await timeOffDetails.decrement('vacationBalance', { by: totalDays })
+                timeOffDetails =await timeOffDetails.increment('vacationUsed', { by: totalDays })
+                return ReS(res, "Leave Request Has Been Accepted and Recorded", { timeOffDetails, request }, 200)
+            }
+        }
+
 
     }
-
-    // const request = _timeOffRequest.create({
-    //     employee_id: id, leave_id: type_id, approver_id: profile.manager_id, status_id: 1
-    //     , startDate, endDate, totalDays, requestReason: reason, peaktime_flag: isPeakTime(startDate, endDate) ? 'T' : 'F',
-    //     alternateStartDate:???, alternateEndDate:???, alternateAccepted:???,
-    //     approvalDueDate:????, approvalReason:????, denialReason:????, approvalTime:????,
-    // })
 }
 export {
     getTimeOffDetails,
